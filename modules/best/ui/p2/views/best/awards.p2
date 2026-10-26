@@ -3,7 +3,8 @@
 {% block title %}BEST Awards{% endblock %}
 
 {% block content %}
-  <div class="box">
+  <div class="box is-flex is-justify-content-center">
+    <div>
     <p>Award rankings by category. Division-aware awards show one ranking per division; the top three ranks are shown, with the full ranking available below. Ties share a rank.</p>
     <br />
     <hr />
@@ -100,5 +101,6 @@
         {% if not forloop.Last %}<hr />{% endif %}
       {% endfor %}
     {% endif %}
+    </div>
   </div>
 {% endblock %}

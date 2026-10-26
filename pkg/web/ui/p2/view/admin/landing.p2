@@ -3,7 +3,9 @@
 {% block title %}Admin{% endblock %}
 
 {% block content %}
-<div class="box">
-  <p>Admin Landing</p>
+<div class="box is-flex is-justify-content-center">
+  <div>
+    <p>Admin Landing</p>
+  </div>
 </div>
 {% endblock %}

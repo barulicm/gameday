@@ -3,7 +3,8 @@
 {% block title %}Region Edit{% endblock %}
 
 {% block content %}
-  <div class="box">
+  <div class="box is-flex is-justify-content-center">
+    <div>
     <form method="POST">
       <div class="field">
         <label for="region_name">Region Name</label>
@@ -18,5 +19,6 @@
         </div>
       </div>
     </form>
+    </div>
   </div>
 {% endblock %}

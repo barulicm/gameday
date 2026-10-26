@@ -3,24 +3,20 @@
 {% block title %}Token Created{% endblock %}
 
 {% block content %}
-<div class="box">
-  <div class="is-flex is-justify-content-center">
+<div class="box is-flex is-justify-content-center">
+  <div>
     <h2 class="title is-4">Token Created</h2>
-  </div>
-  <hr />
-  <div class="is-flex is-justify-content-center">
-    <div>
-      <div class="notification is-warning">
-        Copy this token now. It will not be shown again.
+    <hr />
+    <div class="notification is-warning">
+      Copy this token now. It will not be shown again.
+    </div>
+    <div class="field">
+      <div class="control">
+        <input class="input" type="text" readonly value="{{ token }}" onclick="this.select()" />
       </div>
-      <div class="field">
-        <div class="control">
-          <input class="input" type="text" readonly value="{{ token }}" onclick="this.select()" />
-        </div>
-      </div>
-      <div class="is-flex is-justify-content-center">
-        <a class="button is-primary" href="/admin/user/{{ target.ID }}/tokens">Back to Tokens</a>
-      </div>
+    </div>
+    <div class="is-flex is-justify-content-center">
+      <a class="button is-primary" href="/admin/user/{{ target.ID }}/tokens">Back to Tokens</a>
     </div>
   </div>
 </div>

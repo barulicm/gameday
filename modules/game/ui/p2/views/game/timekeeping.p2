@@ -3,7 +3,7 @@
 {% block title %}Timekeeping{% endblock %}
 
 {% block content %}
-<div class="box is-flex is-flex-direction-column is-justify-content-center">
+<div class="box is-flex is-flex-direction-column is-justify-content-center is-align-items-center">
   <div class="content"><h1>Timekeeping</h1></div>
 
   {% include "../../partials/clock.p2" %}

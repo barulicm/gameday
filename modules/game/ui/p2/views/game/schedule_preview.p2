@@ -3,7 +3,7 @@
 {% block title %}Preview Schedule{% endblock %}
 
 {% block content %}
-<div class="foreground box flex-container flex-row flex-center gameday-schedule{% if fields|length > 1 %} schedule-wide{% endif %}">
+<div class="box is-flex is-justify-content-center gameday-schedule{% if fields|length > 1 %} schedule-wide{% endif %}">
   <div>
     <div class="content">
       <h2>Preview Schedule</h2>

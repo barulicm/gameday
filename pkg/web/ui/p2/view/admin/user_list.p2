@@ -3,37 +3,35 @@
 {% block title %}Users{% endblock %}
 
 {% block content %}
-<div class="box">
-  <div class="is-flex is-justify-content-center">
-    <a class="button is-primary" href="./create">Create User</a>
-  </div>
-  <hr />
-  <div class="is-flex is-justify-content-center">
-    <div>
-      <table class="table">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Login</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for user in users %}
-          <tr>
-            <td>{{ user.ID }}</td>
-            <td>{{ user.Login }}</td>
-            <td class="flex-container flex-row">
-              <a class="button" href="/admin/user/{{ user.ID }}/reset-password">Reset Password</a>
-              <a class="button" href="/admin/profile/{{ user.Profile.ID }}/permissions">Permissions</a>
-              <a class="button" href="/admin/user/{{ user.ID }}/tokens">Tokens</a>
-              <a class="button is-danger" href="/admin/user/{{ user.ID }}/delete">Delete User</a>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+<div class="box is-flex is-justify-content-center">
+  <div>
+    <div class="is-flex is-justify-content-center">
+      <a class="button is-primary" href="./create">Create User</a>
     </div>
+    <hr />
+    <table class="table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Login</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for user in users %}
+        <tr>
+          <td>{{ user.ID }}</td>
+          <td>{{ user.Login }}</td>
+          <td class="flex-container flex-row">
+            <a class="button" href="/admin/user/{{ user.ID }}/reset-password">Reset Password</a>
+            <a class="button" href="/admin/profile/{{ user.Profile.ID }}/permissions">Permissions</a>
+            <a class="button" href="/admin/user/{{ user.ID }}/tokens">Tokens</a>
+            <a class="button is-danger" href="/admin/user/{{ user.ID }}/delete">Delete User</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
 {% endblock %}

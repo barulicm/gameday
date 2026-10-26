@@ -2,7 +2,8 @@
 
 {% block content %}
   {% if onsite %}
-    <div class="box">
+    <div class="box is-flex is-justify-content-center">
+      <div>
       <h2 class="title is-4">Welcome to Gameday</h2>
       {% if user.Identity %}
         <p class="mb-4">Logged in as <strong>{{ user.Identity }}</strong>.</p>
@@ -25,9 +26,11 @@
           in a container).
         </p>
       {% endif %}
+      </div>
     </div>
   {% elif cloud %}
-    <div class="box">
+    <div class="box is-flex is-justify-content-center">
+      <div>
       {% if welcomeMsg %}
         {% comment %}
           Escape the operator's text, keep its line breaks, then mark the
@@ -46,6 +49,7 @@
           in the menu above.
         </p>
       {% endif %}
+      </div>
     </div>
   {% endif %}
 {% endblock %}

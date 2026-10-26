@@ -7,7 +7,9 @@
 {% endblock %}
 
 {% block content %}
-<div class="foreground box">
+<div class="box is-flex is-justify-content-center">
+  <div>
 {% include "../../partials/scorecard.p2" %}
+  </div>
 </div>
 {% endblock %}

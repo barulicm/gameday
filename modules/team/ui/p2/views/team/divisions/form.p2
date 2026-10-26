@@ -3,7 +3,8 @@
 {% block title %}Division Edit{% endblock %}
 
 {% block content %}
-  <div class="box">
+  <div class="box is-flex is-justify-content-center">
+    <div>
     <form method="POST">
       <div class="field">
         <label for="division_name">Division Name</label>
@@ -18,5 +19,6 @@
         </div>
       </div>
     </form>
+    </div>
   </div>
 {% endblock %}
