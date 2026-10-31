@@ -129,7 +129,7 @@
           <td>{{ row.Placement.Phase.Name|capfirst }}</td>
           <td>{{ row.Placement.Match }}</td>
           <td>{{ row.Placement.Field.Name }}</td>
-          <td style="background-color: #{% if forloop.Counter0%2 == 0 %}{{ row.Placement.Position.Color1 }}{% else %}{{ row.Placement.Position.Color2 }}{% endif %};">{{ row.Placement.Position.Name|capfirst }}</td>
+          <td style="background-color: #{{ row.BandColor }}; color: black;">{{ row.Placement.Position.Name|capfirst }}</td>
           <td>{{ row.Placement.Team.Name }}</td>
           <td>{{ row.Placement.State.String()|capfirst }}</td>
           <td>{% if row.Scored %}{{ row.Score }}{% else %}&mdash;{% endif %}</td>

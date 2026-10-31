@@ -116,7 +116,10 @@ ParseFilter:
 
 	// Finally select all MatchPlacements that match the given
 	// filters, which in turn results in a list of scorecards
-	// matching those match placements.
+	// matching those match placements. The ordering matters twice
+	// over: it is what makes a scorecard list readable, and the row
+	// banding below compares each row against its predecessor, so it
+	// only works on a deterministically ordered list.
 	placements, err := gorm.G[MatchPlacement](m.db.DB).
 		Preload("Phase", nil).
 		Preload("Team", nil).
@@ -126,6 +129,7 @@ ParseFilter:
 		Where("field_id in ?", filter.Fields).
 		Where("position_id in ?", filter.Positions).
 		Where("state in ?", filter.States).
+		Order("phase_id, match, field_id, position_id").
 		Find(r.Context())
 	if err != nil {
 		slog.Error("Error retreiving scorecard", "error", err)
@@ -167,6 +171,7 @@ ParseFilter:
 			Scored:    p.State.Scored(),
 		})
 	}
+	bandScorecardRows(rows)
 
 	ctx := pongo2.Context{
 		"available_phases":    phases,
@@ -184,10 +189,37 @@ ParseFilter:
 // a match placement plus its finalized score. Score is only meaningful
 // when Scored is true; the page shows a dash otherwise. Scored comes
 // from the match state, exactly as the cloud lookup page decides it.
+//
+// BandColor is the hex color (no leading '#') the row's Position cell
+// is painted with, decided by bandScorecardRows.
 type scorecardListRow struct {
 	Placement MatchPlacement
 	Score     int
 	Scored    bool
+	BandColor string
+}
+
+// bandScorecardRows assigns each row's Position cell color, using a
+// position's alternate color only where the row sits directly below
+// another row of the same position. A position has two colors so that
+// two of its own rows stacked against each other can still be told
+// apart; alternating them on every row instead shades a listing that
+// shows a single position every other row, which reads as two
+// interleaved positions. Because the list is ordered by match then
+// position, adjacent rows normally differ in position, and the
+// alternate color only appears once the filters narrow the listing to
+// one position (or hide the other position's rows).
+func bandScorecardRows(rows []scorecardListRow) {
+	for i, row := range rows {
+		color := row.Placement.Position.Color1
+		if i > 0 {
+			prev := rows[i-1]
+			if prev.Placement.PositionID == row.Placement.PositionID && prev.BandColor == color {
+				color = row.Placement.Position.Color2
+			}
+		}
+		rows[i].BandColor = color
+	}
 }
 
 func (m *Module) uiViewScorecard(w http.ResponseWriter, r *http.Request) {

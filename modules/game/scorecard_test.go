@@ -249,3 +249,140 @@ func TestScorecardListShowsScores(t *testing.T) {
 		t.Errorf("Scorable placement rendered a bare zero instead of the dash: %s", row)
 	}
 }
+
+// bandColorRow builds a row for the banding tests.
+func bandColorRow(positionID uint, color1, color2 string) scorecardListRow {
+	return scorecardListRow{Placement: MatchPlacement{
+		PositionID: positionID,
+		Position:   FieldPosition{ID: positionID, Color1: color1, Color2: color2},
+	}}
+}
+
+// TestBandScorecardRows covers the banding rule directly: the alternate
+// color only appears where a row sits directly below another row of the
+// same position.
+func TestBandScorecardRows(t *testing.T) {
+	t.Run("two positions never band", func(t *testing.T) {
+		// match1 A, match1 B, match2 A, match2 B
+		rows := []scorecardListRow{
+			bandColorRow(1, "aaaaaa", "bbbbbb"),
+			bandColorRow(2, "cccccc", "dddddd"),
+			bandColorRow(1, "aaaaaa", "bbbbbb"),
+			bandColorRow(2, "cccccc", "dddddd"),
+		}
+		bandScorecardRows(rows)
+		want := []string{"aaaaaa", "cccccc", "aaaaaa", "cccccc"}
+		for i, w := range want {
+			if rows[i].BandColor != w {
+				t.Errorf("row %d = %q, want %q", i, rows[i].BandColor, w)
+			}
+		}
+	})
+
+	t.Run("single position bands", func(t *testing.T) {
+		rows := []scorecardListRow{
+			bandColorRow(1, "aaaaaa", "bbbbbb"),
+			bandColorRow(1, "aaaaaa", "bbbbbb"),
+			bandColorRow(1, "aaaaaa", "bbbbbb"),
+			bandColorRow(1, "aaaaaa", "bbbbbb"),
+		}
+		bandScorecardRows(rows)
+		want := []string{"aaaaaa", "bbbbbb", "aaaaaa", "bbbbbb"}
+		for i, w := range want {
+			if rows[i].BandColor != w {
+				t.Errorf("row %d = %q, want %q", i, rows[i].BandColor, w)
+			}
+		}
+	})
+
+	t.Run("a new position group restarts on the primary color", func(t *testing.T) {
+		rows := []scorecardListRow{
+			bandColorRow(1, "aaaaaa", "bbbbbb"),
+			bandColorRow(1, "aaaaaa", "bbbbbb"),
+			bandColorRow(2, "cccccc", "dddddd"),
+		}
+		bandScorecardRows(rows)
+		want := []string{"aaaaaa", "bbbbbb", "cccccc"}
+		for i, w := range want {
+			if rows[i].BandColor != w {
+				t.Errorf("row %d = %q, want %q", i, rows[i].BandColor, w)
+			}
+		}
+	})
+
+	t.Run("empty list", func(t *testing.T) {
+		bandScorecardRows(nil)
+	})
+}
+
+// TestScorecardListBanding verifies the rendered Position cells use the
+// adjacent-aware banding: with both positions shown every cell keeps its
+// primary color, and narrowing to one position bands its rows.
+func TestScorecardListBanding(t *testing.T) {
+	m, d := newTestModule(t)
+
+	phase := GamePhase{Name: "seeding"}
+	if err := d.Create(&phase).Error; err != nil {
+		t.Fatalf("create phase: %v", err)
+	}
+	field := Field{Name: "Banding Field"}
+	if err := d.Create(&field).Error; err != nil {
+		t.Fatalf("create field: %v", err)
+	}
+	left := FieldPosition{Name: "Left", Color1: "aabbcc", Color2: "112233"}
+	right := FieldPosition{Name: "Right", Color1: "ddeeff", Color2: "445566"}
+	if err := d.Create(&left).Error; err != nil {
+		t.Fatalf("create left position: %v", err)
+	}
+	if err := d.Create(&right).Error; err != nil {
+		t.Fatalf("create right position: %v", err)
+	}
+	teams := seedTeams(t, d, 4)
+
+	// Matches 1 and 2, each on both positions.
+	for i, match := range []MatchState{MatchStateScheduled, MatchStateComplete} {
+		for j, positionID := range []uint{left.ID, right.ID} {
+			mp := MatchPlacement{
+				Match:      i + 1,
+				PhaseID:    phase.ID,
+				FieldID:    field.ID,
+				PositionID: positionID,
+				TeamID:     teams[i*2+j].ID,
+				State:      match,
+			}
+			if err := d.Create(&mp).Error; err != nil {
+				t.Fatalf("create placement: %v", err)
+			}
+		}
+	}
+
+	_, body, _ := routerReq(t, m, adminContext(), http.MethodGet, "/ui/mod/game/scorecard/", "")
+	for _, alt := range []string{"#112233", "#445566"} {
+		if strings.Contains(body, alt) {
+			t.Errorf("alternate band color %s used while both positions are shown", alt)
+		}
+	}
+	for _, primary := range []string{"#aabbcc", "#ddeeff"} {
+		if !strings.Contains(body, primary) {
+			t.Errorf("primary color %s missing", primary)
+		}
+	}
+
+	// Narrow to a single position: its stacked rows must now band.
+	cookie := scorecardFilterCookie(t, map[string][]uint{
+		"Phases":    {phase.ID},
+		"Fields":    {field.ID},
+		"Positions": {left.ID},
+		"States":    {uint(MatchStateScheduled), uint(MatchStateComplete)},
+	})
+	_, body, _ = routerReq(t, m, adminContext(), http.MethodGet, "/ui/mod/game/scorecard/", "", "Cookie", "scorecard_filters="+cookie)
+	if n := strings.Count(body, "background-color: #aabbcc"); n != 1 {
+		t.Errorf("primary band count = %d, want 1:\n%s", n, body)
+	}
+	if n := strings.Count(body, "background-color: #112233"); n != 1 {
+		t.Errorf("alternate band count = %d, want 1:\n%s", n, body)
+	}
+	if strings.Contains(body, "#ddeeff") {
+		t.Error("filtered-out position still rendered a band")
+	}
+}
