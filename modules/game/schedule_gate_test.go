@@ -529,4 +529,55 @@ func TestPhaseListGenerateButtonStates(t *testing.T) {
 			t.Error("ready phase rendered a disabled control")
 		}
 	})
+
+	// A suppressed phase can never carry the Generate control, so it
+	// must not consume the next-up marker: stopping at it would strand
+	// every phase behind it with no control at all.
+	t.Run("suppressed next-up phase passes the control on", func(t *testing.T) {
+		m, d := newTestModule(t)
+
+		seeding := createPhase(t, d, GamePhase{Name: "seeding", Frozen: true, ScheduleType: "OneShot"})
+		wildcard := createPhase(t, d, GamePhase{Name: "wildcard", ScheduleType: "OneShot", Suppress: "len(Roster) < 8", SuppressMsg: "fewer than 8 teams"})
+		fin := createPhase(t, d, GamePhase{Name: "final", ScheduleType: "OneShot"})
+		// The final selects from the wildcard, but only when the
+		// wildcard actually runs; with 4 teams it is suppressed, so
+		// the final draws directly from the seeding phase.
+		createGateFilter(t, d, GamePhaseAdvancementFilter{GamePhaseID: fin.ID, Filter: "ScoreboardRanking", Rule: "Pick", Mode: GamePhaseAdvancementFilterModeInclude, SelectFrom: wildcard.ID, SliceExpr: "2", When: "len(Roster) >= 8"})
+
+		teams := seedTeams(t, d, 4)
+		playPhase(t, d, seeding.ID, teams)
+
+		_, body, _ := routerReq(t, m, adminContext(), "GET", "/ui/mod/game/schedule/", "")
+
+		want := fmt.Sprintf(`href="schedule/phases/%d/select-teams?st=OneShot">Generate Schedule</a>`, fin.ID)
+		if !strings.Contains(body, want) {
+			t.Errorf("generate link %q missing while the next phase in sequence is suppressed", want)
+		}
+		if !strings.Contains(body, "fewer than 8 teams") {
+			t.Error("suppressed phase lost its suppression message")
+		}
+	})
+
+	// The skip is a continue, not a break, so a whole run of
+	// suppressed phases is walked past until a phase that can carry
+	// the control is found.
+	t.Run("run of suppressed phases passes the control on", func(t *testing.T) {
+		m, d := newTestModule(t)
+
+		seeding := createPhase(t, d, GamePhase{Name: "seeding", Frozen: true, ScheduleType: "OneShot"})
+		createPhase(t, d, GamePhase{Name: "wildcard", ScheduleType: "OneShot", Suppress: "len(Roster) < 8"})
+		createPhase(t, d, GamePhase{Name: "last-chance", ScheduleType: "OneShot", Suppress: "len(Roster) < 16"})
+		fin := createPhase(t, d, GamePhase{Name: "final", ScheduleType: "OneShot"})
+		createGateFilter(t, d, GamePhaseAdvancementFilter{GamePhaseID: fin.ID, Filter: "ScoreboardRanking", Rule: "Pick", Mode: GamePhaseAdvancementFilterModeInclude, SelectFrom: seeding.ID, SliceExpr: "2"})
+
+		teams := seedTeams(t, d, 4)
+		playPhase(t, d, seeding.ID, teams)
+
+		_, body, _ := routerReq(t, m, adminContext(), "GET", "/ui/mod/game/schedule/", "")
+
+		want := fmt.Sprintf(`href="schedule/phases/%d/select-teams?st=OneShot">Generate Schedule</a>`, fin.ID)
+		if !strings.Contains(body, want) {
+			t.Errorf("generate link %q missing behind two suppressed phases", want)
+		}
+	})
 }

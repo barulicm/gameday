@@ -78,7 +78,10 @@ func (m *Module) uiViewPhaseList(w http.ResponseWriter, r *http.Request) {
 
 	// Only the next phase up gets a Generate Schedule control: a phase
 	// still waiting behind an unfrozen source has nothing to explain,
-	// because the source is itself the next thing to do.
+	// because the source is itself the next thing to do.  Suppressed
+	// phases are skipped too: they can never receive a control (the
+	// template withholds it), so stopping at one would strand every
+	// phase behind it with no button at all.
 	nextPhase := make(map[uint]bool)
 	sequence, err := m.phaseSequence(r.Context(), phases)
 	if err != nil {
@@ -87,7 +90,7 @@ func (m *Module) uiViewPhaseList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, phase := range sequence {
-		if scheduleAvailable[phase.ID] || phase.Frozen {
+		if scheduleAvailable[phase.ID] || phase.Frozen || !whenActive[phase.ID] {
 			continue
 		}
 		nextPhase[phase.ID] = true
