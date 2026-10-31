@@ -119,25 +119,27 @@
           <th>Position</th>
           <th>Team</th>
           <th>State</th>
+          <th>Score</th>
           <th>Actions</th>
         </tr>
       </thead>
       <tbody>
-        {% for placement in placements %}
+        {% for row in rows %}
         <tr>
-          <td>{{ placement.Phase.Name|capfirst }}</td>
-          <td>{{ placement.Match }}</td>
-          <td>{{ placement.Field.Name }}</td>
-          <td style="background-color: #{% if forloop.Counter0%2 == 0 %}{{ placement.Position.Color1 }}{% else %}{{ placement.Position.Color2 }}{% endif %};">{{ placement.Position.Name|capfirst }}</td>
-          <td>{{ placement.Team.Name }}</td>
-          <td>{{ placement.State.String()|capfirst }}</td>
+          <td>{{ row.Placement.Phase.Name|capfirst }}</td>
+          <td>{{ row.Placement.Match }}</td>
+          <td>{{ row.Placement.Field.Name }}</td>
+          <td style="background-color: #{% if forloop.Counter0%2 == 0 %}{{ row.Placement.Position.Color1 }}{% else %}{{ row.Placement.Position.Color2 }}{% endif %};">{{ row.Placement.Position.Name|capfirst }}</td>
+          <td>{{ row.Placement.Team.Name }}</td>
+          <td>{{ row.Placement.State.String()|capfirst }}</td>
+          <td>{% if row.Scored %}{{ row.Score }}{% else %}&mdash;{% endif %}</td>
           <td>
-            <a class="button is-primary" href="scorecard/{{ placement.Phase.ID }}/{{ placement.Match }}/{{ placement.Field.ID }}/{{ placement.Position.ID }}">View</a>
+            <a class="button is-primary" href="scorecard/{{ row.Placement.Phase.ID }}/{{ row.Placement.Match }}/{{ row.Placement.Field.ID }}/{{ row.Placement.Position.ID }}">View</a>
           </td>
         </tr>
         {% empty%}
         <tr>
-          <td colspan="7">No Matches for Current Filters</td>
+          <td colspan="8">No Matches for Current Filters</td>
         </tr>
         {% endfor %}
       </tbody>

@@ -104,6 +104,22 @@ func (m MatchState) String() string {
 	}
 }
 
+// Scored reports whether a match in this state has a definitive score
+// to show, which is what the scorecard listings use to decide between
+// a number and a dash. A scorecard submit writes its MatchScore row and
+// flips the placement to MatchStateComplete in the same transaction, so
+// Complete carries the submitted total; a no-show and a disqualification
+// are settled results too, worth a forced zero. Every earlier state is
+// still in flight, so its score is not known yet.
+func (m MatchState) Scored() bool {
+	switch m {
+	case MatchStateComplete, MatchStateNoShow, MatchStateDisqualified:
+		return true
+	default:
+		return false
+	}
+}
+
 // GamePhaseAdvancementFilterMode is used to identify whether a filter
 // is an include filter or an exclude filter.  Exclude filters are
 // processed first to prune the list of teams that may be advanced,

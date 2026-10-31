@@ -29,12 +29,15 @@ type contestOption struct {
 
 // cloudScorecardRow is one table row on the cloud scorecards page: a
 // pushed placement plus its pre-computed state, contest, and phase
-// names.
+// names. Scored keys the Score column on the state rather than on the
+// stored number, because a pushed 0 cannot tell an unscored match from
+// a match that legitimately scored zero.
 type cloudScorecardRow struct {
 	Placement   CloudMatchPlacement
 	StateName   string
 	ContestName string
 	PhaseName   string
+	Scored      bool
 }
 
 // contestRow is a minimal local view of the contest module's Contest
@@ -121,6 +124,7 @@ func (m *Module) uiViewCloudScorecards(w http.ResponseWriter, r *http.Request) {
 			StateName:   MatchState(p.State).String(),
 			ContestName: contestName(contestNames, p.ContestID),
 			PhaseName:   phaseName(phaseNames, p.PhaseID),
+			Scored:      MatchState(p.State).Scored(),
 		})
 	}
 

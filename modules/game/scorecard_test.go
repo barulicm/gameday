@@ -13,7 +13,7 @@ import (
 
 // seedScorecardPlacement creates a match placement in the given state
 // for the team, on the shared test phase/field/position.
-func seedScorecardPlacement(t *testing.T, d *db.DB, phaseID, fieldID, positionID, teamID uint, state MatchState) {
+func seedScorecardPlacement(t *testing.T, d *db.DB, phaseID, fieldID, positionID, teamID uint, state MatchState) MatchPlacement {
 	t.Helper()
 	mp := MatchPlacement{
 		Match:      int(state),
@@ -25,6 +25,23 @@ func seedScorecardPlacement(t *testing.T, d *db.DB, phaseID, fieldID, positionID
 	}
 	if err := d.Create(&mp).Error; err != nil {
 		t.Fatalf("create placement: %v", err)
+	}
+	return mp
+}
+
+// seedScorecardScore records the finalized score for a placement, as a
+// submitted scorecard would.
+func seedScorecardScore(t *testing.T, d *db.DB, mp MatchPlacement, score int) {
+	t.Helper()
+	ms := MatchScore{
+		ID:               mp.ID,
+		MatchPlacementID: mp.ID,
+		GamePhaseID:      mp.PhaseID,
+		TeamID:           mp.TeamID,
+		Score:            score,
+	}
+	if err := d.Create(&ms).Error; err != nil {
+		t.Fatalf("create score: %v", err)
 	}
 }
 
@@ -173,5 +190,62 @@ func TestScorecardListClearFilters(t *testing.T) {
 		if !strings.Contains(body, tm.Name) {
 			t.Errorf("team %q missing after clearing filters", tm.Name)
 		}
+	}
+}
+
+// scorecardRow returns the rendered table row containing the team name,
+// so a test can assert which score landed in which row.
+func scorecardRow(t *testing.T, body, teamName string) string {
+	t.Helper()
+	for _, chunk := range strings.Split(body, "<tr>") {
+		if strings.Contains(chunk, teamName) && strings.Contains(chunk, "</tr>") {
+			return chunk[:strings.Index(chunk, "</tr>")]
+		}
+	}
+	t.Fatalf("no table row for %q", teamName)
+	return ""
+}
+
+// TestScorecardListShowsScores verifies the onsite list shows each
+// scorecard's finalized score, like the cloud lookup page does, and a
+// dash for matches that have not been settled yet. The dash is keyed on
+// the placement's match state via MatchState.Scored(), not on whether a
+// MatchScore row exists: only the terminal states Complete, NoShow and
+// Disqualified are scored, so the seeded Scorable placement renders the
+// placeholder even though its stored score is zero.
+func TestScorecardListShowsScores(t *testing.T) {
+	m, d := newTestModule(t)
+
+	phase := GamePhase{Name: "seeding"}
+	if err := d.Create(&phase).Error; err != nil {
+		t.Fatalf("create phase: %v", err)
+	}
+	field := Field{Name: "Score Field"}
+	if err := d.Create(&field).Error; err != nil {
+		t.Fatalf("create field: %v", err)
+	}
+	position := FieldPosition{Name: "Score Position"}
+	if err := d.Create(&position).Error; err != nil {
+		t.Fatalf("create position: %v", err)
+	}
+	teams := seedTeams(t, d, 2)
+
+	scored := seedScorecardPlacement(t, d, phase.ID, field.ID, position.ID, teams[0].ID, MatchStateComplete)
+	seedScorecardScore(t, d, scored, 42)
+	seedScorecardPlacement(t, d, phase.ID, field.ID, position.ID, teams[1].ID, MatchStateScorable)
+
+	_, body, _ := routerReq(t, m, adminContext(), http.MethodGet, "/ui/mod/game/scorecard/", "")
+	if !strings.Contains(body, "<th>Score</th>") {
+		t.Error("Score column header missing from scorecard list")
+	}
+
+	if row := scorecardRow(t, body, teams[0].Name); !strings.Contains(row, "<td>42</td>") {
+		t.Errorf("scored row missing score: %s", row)
+	}
+	if row := scorecardRow(t, body, teams[1].Name); !strings.Contains(row, "&mdash;") {
+		t.Errorf("unscored row missing dash placeholder: %s", row)
+	}
+	if row := scorecardRow(t, body, teams[1].Name); strings.Contains(row, "<td>0</td>") {
+		t.Errorf("Scorable placement rendered a bare zero instead of the dash: %s", row)
 	}
 }

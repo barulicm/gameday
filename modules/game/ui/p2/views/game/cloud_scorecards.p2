@@ -68,7 +68,7 @@
           <td>{{ row.Placement.Round|add:1 }}</td>
           <td>{{ row.Placement.Match }}</td>
           <td>{{ row.StateName }}</td>
-          <td>{{ row.Placement.Score }}</td>
+          <td>{% if row.Scored %}{{ row.Placement.Score }}{% else %}&mdash;{% endif %}</td>
           <td><a class="button is-small is-dark" href="{{ pageBase }}/{{ row.Placement.ID }}">View</a></td>
         </tr>
         {% endfor %}

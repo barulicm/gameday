@@ -133,16 +133,61 @@ ParseFilter:
 		return
 	}
 
+	// Attach each placement's finalized score, when it has one, so the
+	// list shows the same Score column the cloud lookup page does. The
+	// scores are loaded in one query and keyed by placement rather than
+	// preloaded, because MatchScore points at the placement, not the
+	// other way around. Whether a row has a score at all is decided by
+	// the placement's state, not by this map, so both pages agree on
+	// which matches are still unscored.
+	scoreByID := make(map[uint]int)
+	if len(placements) > 0 {
+		placementIDs := make([]uint, 0, len(placements))
+		for _, p := range placements {
+			placementIDs = append(placementIDs, p.ID)
+		}
+		scores, err := gorm.G[MatchScore](m.db.DB).
+			Where("match_placement_id IN ?", placementIDs).
+			Find(r.Context())
+		if err != nil {
+			slog.Error("Error retreiving match scores", "error", err)
+			m.ws.DoTemplate(w, r, "errors/internal.p2", pongo2.Context{"error": err})
+			return
+		}
+		for _, s := range scores {
+			scoreByID[s.MatchPlacementID] = s.Score
+		}
+	}
+
+	rows := make([]scorecardListRow, 0, len(placements))
+	for _, p := range placements {
+		rows = append(rows, scorecardListRow{
+			Placement: p,
+			Score:     scoreByID[p.ID],
+			Scored:    p.State.Scored(),
+		})
+	}
+
 	ctx := pongo2.Context{
 		"available_phases":    phases,
 		"available_fields":    fields,
 		"available_positions": positions,
 		"available_states":    MatchStates,
 		"filter":              filter,
-		"placements":          placements,
+		"rows":                rows,
 	}
 
 	m.ws.DoTemplate(w, r, "views/game/scorecard_list.p2", ctx)
+}
+
+// scorecardListRow is one table row on the onsite scorecard list page:
+// a match placement plus its finalized score. Score is only meaningful
+// when Scored is true; the page shows a dash otherwise. Scored comes
+// from the match state, exactly as the cloud lookup page decides it.
+type scorecardListRow struct {
+	Placement MatchPlacement
+	Score     int
+	Scored    bool
 }
 
 func (m *Module) uiViewScorecard(w http.ResponseWriter, r *http.Request) {

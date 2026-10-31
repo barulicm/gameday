@@ -129,8 +129,51 @@ func TestCloudScorecardsList(t *testing.T) {
 	if !strings.Contains(body, fmt.Sprintf("/ui/mod/game/scorecards/%d\">View</a>", p.ID)) {
 		t.Error("missing View link to the scorecard detail page")
 	}
+	if !strings.Contains(body, "<td>150</td>") {
+		t.Error("Complete placement missing its pushed score 150")
+	}
 	if scorecardTotal(t, body) != 1 {
 		t.Errorf("total = %d, want 1", scorecardTotal(t, body))
+	}
+}
+
+// TestCloudScorecardsListScoreByState verifies the cloud list dashes an
+// unsettled pushed placement rather than rendering the zero that every
+// unscored placement carries in the push. The dash is keyed on the
+// stored match state via MatchState.Scored(), the same rule the onsite
+// list uses, so no extra wire field is needed to tell an unscored match
+// from one that legitimately scored zero.
+func TestCloudScorecardsListScoreByState(t *testing.T) {
+	m, d := newTestModule(t)
+	cm := newCloudTestModule(t, d, m.ws, modules.ModuleDeps{"team": m.tm.(modules.Web)})
+
+	seedCloudPlacement(t, d.DB, CloudMatchPlacement{
+		ContestID: 1, Round: 0, Match: 1, PhaseID: 1,
+		TeamID: 101, TeamName: "Alpha Robotics",
+		FieldID: 1, PositionID: 1,
+		State: uint(MatchStateComplete), Score: 150,
+	})
+	seedCloudPlacement(t, d.DB, CloudMatchPlacement{
+		ContestID: 1, Round: 0, Match: 1, PhaseID: 1,
+		TeamID: 102, TeamName: "Beta Robotics",
+		FieldID: 1, PositionID: 2,
+		State: uint(MatchStateScheduled), Score: 0,
+	})
+
+	code, body, _ := routerReq(t, cm, adminContext(), http.MethodGet, "/ui/mod/game/scorecards", "")
+	if code != http.StatusOK {
+		t.Fatalf("scorecards = %d, want 200: %s", code, body)
+	}
+
+	if row := scorecardRow(t, body, "Alpha Robotics"); !strings.Contains(row, "<td>150</td>") {
+		t.Errorf("Complete row missing its score: %s", row)
+	}
+	beta := scorecardRow(t, body, "Beta Robotics")
+	if !strings.Contains(beta, "&mdash;") {
+		t.Errorf("Scheduled row missing dash placeholder: %s", beta)
+	}
+	if strings.Contains(beta, "<td>0</td>") {
+		t.Errorf("Scheduled row rendered a bare zero instead of the dash: %s", beta)
 	}
 }
 
