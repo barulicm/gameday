@@ -73,6 +73,7 @@ func New(_ string, db *db.DB, ws *web.Server, deps modules.ModuleDeps) *Module {
 	nb := &NotebookAdvancement{db: db}
 	game.RegisterAdvancementFilter(nb.Name(), nb)
 	unifiedTieBreaker = nb.TieBreaker
+	registerTieBreaker()
 
 	pAdmin := web.Permission{Module: ModuleName, Grant: PermissionAdmin}
 	m.r.Route("/", func(r chi.Router) {

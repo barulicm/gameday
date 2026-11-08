@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"testing"
 
 	"github.com/gizmo-platform/gameday/modules"
@@ -300,6 +302,233 @@ func TestResolveTiesEmptyRows(t *testing.T) {
 	if len(rows) != 0 {
 		t.Errorf("resolveTies left %d rows, want 0", len(rows))
 	}
+}
+
+// tiedScore is a (team number, score) pair used to build scratch
+// ranking rows.
+type tiedScore struct {
+	number int
+	score  int
+}
+
+// scratchRows builds ranking rows from (team number, score) pairs in
+// the given order, the order the scoreboard query returns them, with
+// dense ranks already assigned by score.
+func scratchRows(pairs ...tiedScore) []RankingRow {
+	rows := make([]RankingRow, 0, len(pairs))
+	for _, p := range pairs {
+		rows = append(rows, RankingRow{
+			TeamID: uint(p.number),
+			Team:   team.Team{ID: uint(p.number), Number: p.number},
+			Score:  p.score,
+		})
+	}
+	rank := 1
+	for i := range rows {
+		if i > 0 && rows[i-1].Score != rows[i].Score {
+			rank++
+		}
+		rows[i].Rank = rank
+	}
+	return rows
+}
+
+// assertNoScoreInversion fails when a row with a lower score holds a
+// rank ahead of a row with a higher score.
+func assertNoScoreInversion(t *testing.T, rows []RankingRow) {
+	t.Helper()
+	for i := 1; i < len(rows); i++ {
+		if rows[i].Score > rows[i-1].Score {
+			t.Errorf("rank inversion: row %d (team %d, score %d) ranked above row %d (team %d, score %d)",
+				i, rows[i].Team.Number, rows[i].Score,
+				i-1, rows[i-1].Team.Number, rows[i-1].Score)
+		}
+	}
+}
+
+// TestResolveTiesRenumbersBehindGroup verifies a resolved tied group
+// of three or more teams pushes the rows behind it down instead of
+// letting them keep their stale dense ranks: with a 100/90/90/90/80
+// board the 80-pointer must rank below every 90-pointer, not share or
+// leap a rank among them.
+func TestResolveTiesRenumbersBehindGroup(t *testing.T) {
+	_, d := newTestModule(t)
+	ctx := context.Background()
+
+	modules.RegisterTieBreaker("testReverseTB", func(nums []int, _ int) []int {
+		out := slices.Clone(nums)
+		sort.Slice(out, func(i, j int) bool { return out[i] > out[j] })
+		return out
+	})
+
+	rows := scratchRows(
+		tiedScore{101, 100}, tiedScore{102, 90}, tiedScore{103, 90}, tiedScore{104, 90}, tiedScore{105, 80},
+	)
+	resolveTies(ctx, d, &rows, &GamePhase{TieBreaker: "testReverseTB"})
+
+	assertNoScoreInversion(t, rows)
+	wantOrder := []int{101, 104, 103, 102, 105}
+	for i, want := range wantOrder {
+		if rows[i].Team.Number != want {
+			t.Errorf("position %d: team %d, want %d (%v)", i, rows[i].Team.Number, want, teamNumbers(rows))
+		}
+	}
+	// Every team holds a distinct rank: the tie was fully broken.
+	seen := map[int]struct{}{}
+	for _, r := range rows {
+		if _, dup := seen[r.Rank]; dup {
+			t.Errorf("duplicate rank %d in %v", r.Rank, ranks(rows))
+		}
+		seen[r.Rank] = struct{}{}
+	}
+}
+
+// TestResolveTiesMultipleGroupsAccumulateShift verifies that when two
+// or more tied groups are resolved, every later group and every row
+// behind them shifts by the accumulated expansion: on a
+// 100/100/90/90/80 board the 80-pointer must land last, ahead of
+// nobody.
+func TestResolveTiesMultipleGroupsAccumulateShift(t *testing.T) {
+	_, d := newTestModule(t)
+	ctx := context.Background()
+
+	modules.RegisterTieBreaker("testIdentityTB", func(nums []int, _ int) []int {
+		return slices.Clone(nums)
+	})
+
+	rows := scratchRows(
+		tiedScore{101, 100}, tiedScore{102, 100}, tiedScore{103, 90}, tiedScore{104, 90}, tiedScore{105, 80},
+	)
+	resolveTies(ctx, d, &rows, &GamePhase{TieBreaker: "testIdentityTB"})
+
+	assertNoScoreInversion(t, rows)
+	wantOrder := []int{101, 102, 103, 104, 105}
+	for i, want := range wantOrder {
+		if rows[i].Team.Number != want {
+			t.Errorf("position %d: team %d, want %d (%v)", i, rows[i].Team.Number, want, teamNumbers(rows))
+		}
+	}
+	wantRanks := []int{1, 2, 3, 4, 5}
+	for i, want := range wantRanks {
+		if rows[i].Rank != want {
+			t.Errorf("position %d: rank %d, want %d (%v)", i, rows[i].Rank, want, ranks(rows))
+		}
+	}
+}
+
+// TestResolveTiesPartialGroupKeepsTie verifies rows a resolved group
+// did not reorder (a division aware phase's cross-division singleton
+// sub-groups) still share ranks with each other when their scores
+// match, while the reordered members expand ahead of them.
+func TestResolveTiesPartialGroupKeepsTie(t *testing.T) {
+	_, d := newTestModule(t)
+	ctx := context.Background()
+
+	modules.RegisterTieBreaker("testPartialTB", func(nums []int, _ int) []int {
+		return slices.Clone(nums)
+	})
+
+	// Rank-1 block: division Red has two teams the tie-breaker
+	// separates, division Blue has one team nobody compares.  The Red
+	// pair expands to strict ranks; the Blue team, sharing the block's
+	// score, lands behind the pair but on top of a lower score, never
+	// above it.
+	rows := scratchRows(
+		tiedScore{101, 90}, tiedScore{102, 90}, tiedScore{201, 90}, tiedScore{103, 80},
+	)
+	rows[0].Team.Division.Name = "Red"
+	rows[1].Team.Division.Name = "Red"
+	rows[2].Team.Division.Name = "Blue"
+	rows[3].Team.Division.Name = "Red"
+	resolveTies(ctx, d, &rows, &GamePhase{TieBreaker: "testPartialTB", DivisionAware: true})
+
+	assertNoScoreInversion(t, rows)
+	wantOrder := []int{101, 102, 201, 103}
+	for i, want := range wantOrder {
+		if rows[i].Team.Number != want {
+			t.Errorf("position %d: team %d, want %d (%v)", i, rows[i].Team.Number, want, teamNumbers(rows))
+		}
+	}
+	// The separated Red pair is strict; the untouched Blue team keeps
+	// its own rank behind the pair; the 80-pointer shifts down with
+	// the expansion.
+	wantRanks := []int{1, 2, 3, 4}
+	for i, want := range wantRanks {
+		if rows[i].Rank != want {
+			t.Errorf("position %d: rank %d, want %d (%v)", i, rows[i].Rank, want, ranks(rows))
+		}
+	}
+}
+
+// TestResolveTiesUntouchedBoardStaysShared verifies a board where the
+// tie-breaker returns tied members in input order still reorders them
+// strictly (the breaker decides strict order), while a separate tied
+// block with only cross-division singletons keeps sharing its rank.
+func TestResolveTiesCrossDivisionSingletonKeepsTie(t *testing.T) {
+	_, d := newTestModule(t)
+	ctx := context.Background()
+
+	// A no-op breaker: it returns the input untouched, but the group
+	// is still "resolved" in the sense that ranks expand.
+	modules.RegisterTieBreaker("testNoopTB", func(nums []int, _ int) []int {
+		return slices.Clone(nums)
+	})
+
+	rows := scratchRows(
+		tiedScore{101, 90}, tiedScore{201, 90}, tiedScore{102, 80},
+	)
+	rows[0].Team.Division.Name = "Red"
+	rows[1].Team.Division.Name = "Blue"
+	rows[2].Team.Division.Name = "Red"
+	resolveTies(ctx, d, &rows, &GamePhase{TieBreaker: "testNoopTB", DivisionAware: true})
+
+	// Both 90s are in different divisions, so no sub-group of two
+	// exists and nothing is reordered: the tie must stay shared.
+	if rows[0].Rank != rows[1].Rank {
+		t.Errorf("cross-division teams lost their shared rank: %v", ranks(rows))
+	}
+	if rows[2].Rank != 2 {
+		t.Errorf("80-pointer rank = %d, want 2 (%v)", rows[2].Rank, ranks(rows))
+	}
+}
+
+// TestOrderTiedGroupSanitizes verifies a misbehaving tie-breaker can
+// never drop or duplicate a team: unknown and repeated numbers are
+// skipped and any team it failed to return keeps its slot at the end.
+func TestOrderTiedGroupSanitizes(t *testing.T) {
+	rows := scratchRows(tiedScore{101, 90}, tiedScore{102, 90}, tiedScore{103, 90})
+	group := []int{0, 1, 2}
+
+	broken := func(nums []int, _ int) []int {
+		return []int{103, 103, 999, 101}
+	}
+	got := orderTiedGroup(broken, rows, group, 0)
+
+	want := []int{2, 0, 1}
+	if len(got) != len(want) {
+		t.Fatalf("got %d indices, want %d: %v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("position %d: index %d, want %d (%v)", i, got[i], w, got)
+		}
+	}
+}
+
+func teamNumbers(rows []RankingRow) []int {
+	out := make([]int, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Team.Number)
+	}
+	return out
+}
+
+func ranks(rows []RankingRow) []int {
+	out := make([]int, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Rank)
+	}
+	return out
 }
 
 // TestRosterAdvancementInclude verifies the Roster filter advances
@@ -685,13 +914,13 @@ func TestRunAdvancementFiltersWhen(t *testing.T) {
 	}
 
 	cases := []struct {
-		name        string
-		when        string
-		division    string
-		wantErr     bool
-		wantCalls   int
-		wantAdv     int
-		wantDets    int
+		name      string
+		when      string
+		division  string
+		wantErr   bool
+		wantCalls int
+		wantAdv   int
+		wantDets  int
 	}{
 		{"empty When runs the filter", "", "", false, 1, len(teams), len(teams)},
 		{"literal true runs the filter", "true", "", false, 1, len(teams), len(teams)},

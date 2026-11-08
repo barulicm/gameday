@@ -580,6 +580,12 @@ func (m *Module) phaseSequence(ctx context.Context, phases []GamePhase) ([]GameP
 	return out, nil
 }
 
+// resolveTies strictly orders tied groups using the phase's configured
+// tie-breaker and renumbers the board behind every reordered group, so
+// a lower score can never out-rank a higher one.  Rows the tie-breaker
+// separates get consecutive ranks; rows it leaves equal (teams from
+// different divisions of a division aware phase, which are never
+// compared against each other) keep sharing a rank.
 func resolveTies(ctx context.Context, dbd *db.DB, rows *[]RankingRow, phase *GamePhase) {
 	if len(*rows) == 0 {
 		return
@@ -590,100 +596,151 @@ func resolveTies(ctx context.Context, dbd *db.DB, rows *[]RankingRow, phase *Gam
 		return
 	}
 
-	// Group rows by rank to find tied groups.
-	// A tied group has 2+ rows sharing the same rank.
-	type tiedGroup struct {
-		divisionName string
-		indices      []int
-	}
-	var groups []tiedGroup
-	currentRank := (*rows)[0].Rank
-	var currentIndices []int
-	for i := range *rows {
-		if (*rows)[i].Rank == currentRank {
-			currentIndices = append(currentIndices, i)
-		} else {
-			if len(currentIndices) > 1 {
-				if phase.DivisionAware {
-					// Split by division.
-					byDiv := make(map[string][]int)
-					for _, idx := range currentIndices {
-						divName := (*rows)[idx].Team.Division.Name
-						byDiv[divName] = append(byDiv[divName], idx)
-					}
-					for div, indices := range byDiv {
-						if len(indices) > 1 {
-							groups = append(groups, tiedGroup{divisionName: div, indices: indices})
-						}
-					}
-				} else {
-					groups = append(groups, tiedGroup{divisionName: "", indices: currentIndices})
-				}
-			}
-			currentRank = (*rows)[i].Rank
-			currentIndices = []int{i}
-		}
-	}
-	// Handle the last group.
-	if len(currentIndices) > 1 {
-		if phase.DivisionAware {
-			byDiv := make(map[string][]int)
-			for _, idx := range currentIndices {
-				divName := (*rows)[idx].Team.Division.Name
-				byDiv[divName] = append(byDiv[divName], idx)
-			}
-			for div, indices := range byDiv {
-				if len(indices) > 1 {
-					groups = append(groups, tiedGroup{divisionName: div, indices: indices})
-				}
-			}
-		} else {
-			groups = append(groups, tiedGroup{divisionName: "", indices: currentIndices})
-		}
-	}
-
-	if len(groups) == 0 {
-		return
-	}
-
 	// Count total matches for this phase (for tie-breaker context).
 	var matchCount int64
 	if err := dbd.Model(&MatchScore{}).Where("game_phase_id = ?", phase.ID).Count(&matchCount).Error; err != nil {
 		slog.Warn("Error counting matches for tie-breaker context", "error", err)
 	}
 
-	// Build ordered rank assignments for each tied group.
-	type rankAssignment struct {
-		teamNumber int
-		newRank    int
+	// A tied block is a maximal run of rows sharing a rank.  When the
+	// phase is division aware each block is subdivided by division and
+	// only sub-groups of two or more teams are reordered.
+	type tiedBlock struct {
+		start int
+		end   int
+		// orders holds, per sub-group of two or more teams, the row
+		// indices in tie-breaker order.
+		orders [][]int
 	}
-	assignments := make(map[int]rankAssignment)
-
-	for g, group := range groups {
-		teamNumbers := make([]int, len(group.indices))
-		for i, idx := range group.indices {
-			teamNumbers[i] = (*rows)[idx].Team.Number
+	resolved := make([]bool, len(*rows))
+	var blocks []tiedBlock
+	start := 0
+	for i := 1; i <= len(*rows); i++ {
+		if i < len(*rows) && (*rows)[i].Rank == (*rows)[start].Rank {
+			continue
 		}
+		// rows[start:i] share a rank.
+		if i-1 > start {
+			var subGroups [][]int
+			if phase.DivisionAware {
+				byDiv := make(map[string][]int)
+				var names []string
+				for idx := start; idx < i; idx++ {
+					div := (*rows)[idx].Team.Division.Name
+					if _, seen := byDiv[div]; !seen {
+						names = append(names, div)
+					}
+					byDiv[div] = append(byDiv[div], idx)
+				}
+				for _, name := range names {
+					subGroups = append(subGroups, byDiv[name])
+				}
+			} else {
+				whole := make([]int, 0, i-start)
+				for idx := start; idx < i; idx++ {
+					whole = append(whole, idx)
+				}
+				subGroups = [][]int{whole}
+			}
 
-		ordered := tb(teamNumbers, int(matchCount))
-
-		baseRank := group.indices[0]
-		for i, num := range ordered {
-			for _, idx := range group.indices {
-				if (*rows)[idx].Team.Number == num {
-					assignments[idx] = rankAssignment{teamNumber: num, newRank: baseRank + 1 + i}
-					break
+			block := tiedBlock{start: start, end: i - 1}
+			for _, group := range subGroups {
+				if len(group) < 2 {
+					continue
+				}
+				ordered := orderTiedGroup(tb, *rows, group, int(matchCount))
+				block.orders = append(block.orders, ordered)
+				for _, idx := range ordered {
+					resolved[idx] = true
 				}
 			}
+			if len(block.orders) > 0 {
+				blocks = append(blocks, block)
+			}
 		}
-		_ = g
+		start = i
 	}
 
-	// Apply new ranks and sort by new rank.
-	for idx, a := range assignments {
-		(*rows)[idx].Rank = a.newRank
+	if len(blocks) == 0 {
+		return
 	}
-	sort.SliceStable(*rows, func(i, j int) bool {
-		return (*rows)[i].Rank < (*rows)[j].Rank
-	})
+
+	// Rewrite the rows so each tied block lists its reordered members
+	// first, in tie-breaker order, with any member the block did not
+	// reorder following behind.
+	out := make([]RankingRow, 0, len(*rows))
+	outResolved := make([]bool, 0, len(*rows))
+	next := 0
+	for i := 0; i < len(*rows); i++ {
+		for next < len(blocks) && i > blocks[next].end {
+			next++
+		}
+		if next < len(blocks) && i == blocks[next].start {
+			block := blocks[next]
+			for _, ordered := range block.orders {
+				for _, idx := range ordered {
+					out = append(out, (*rows)[idx])
+					outResolved = append(outResolved, true)
+				}
+			}
+			for idx := block.start; idx <= block.end; idx++ {
+				if !resolved[idx] {
+					out = append(out, (*rows)[idx])
+					outResolved = append(outResolved, false)
+				}
+			}
+			i = block.end
+			continue
+		}
+		out = append(out, (*rows)[i])
+		outResolved = append(outResolved, false)
+	}
+
+	// Renumber the whole board: the rank advances past a row the
+	// tie-breaker separated or a row with a different score, so every
+	// row behind a block shifts down by that block's expansion while
+	// rows that remain tied keep sharing one rank.
+	rank := 1
+	for i := range out {
+		if i > 0 && (out[i-1].Score != out[i].Score || outResolved[i-1] || outResolved[i]) {
+			rank++
+		}
+		out[i].Rank = rank
+	}
+	*rows = out
+}
+
+// orderTiedGroup asks the tie-breaker to strictly order the rows at the
+// given indices and returns those indices in tie-breaker order.  The
+// result is sanitized: team numbers the tie-breaker does not recognize
+// or repeats are dropped, and any team it failed to return keeps its
+// original relative position at the end of the group, so a
+// misbehaving tie-breaker can never drop a team from the board.
+func orderTiedGroup(tb modules.TieBreaker, rows []RankingRow, group []int, matchCount int) []int {
+	numbers := make([]int, len(group))
+	byNumber := make(map[int]int, len(group))
+	for i, idx := range group {
+		numbers[i] = rows[idx].Team.Number
+		byNumber[rows[idx].Team.Number] = idx
+	}
+
+	out := make([]int, 0, len(group))
+	seen := make(map[int]struct{}, len(group))
+	for _, number := range tb(numbers, matchCount) {
+		idx, ok := byNumber[number]
+		if !ok {
+			continue
+		}
+		if _, dup := seen[number]; dup {
+			continue
+		}
+		seen[number] = struct{}{}
+		out = append(out, idx)
+	}
+	for _, idx := range group {
+		if _, ok := seen[rows[idx].Team.Number]; !ok {
+			out = append(out, idx)
+		}
+	}
+	return out
 }

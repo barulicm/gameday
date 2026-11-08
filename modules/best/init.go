@@ -18,13 +18,6 @@ func init() {
 		},
 	})
 
-	// Register the tie-breaker exactly once, dispatching through the
-	// package-level indirection that New() updates with the current
-	// database handle.
-	modules.RegisterTieBreaker(TieBreakerBESTUnified, func(nums []int, mc int) []int {
-		return unifiedTieBreaker(nums, mc)
-	})
-
 	// Register the wildcard phase role with the game module's role
 	// registry so setup files can tag a phase as the wildcard phase.
 	game.RegisterPhaseRole(RoleWildcard)

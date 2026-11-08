@@ -584,7 +584,9 @@ unbroken (tied teams keep their shared rank).
 ### The only valid value
 
 The **only registered tie breaker is `BESTUnifiedTieBreaker`**, provided by the
-BEST module. It orders a tied group by:
+BEST module; the name only resolves while the module is loaded, so a game file
+naming it at an event without the BEST module reports as an unknown tie breaker
+when linted. It orders a tied group by:
 
 1. Notebook score, highest first
 2. Marketing score, highest first
@@ -603,6 +605,12 @@ shared rank.
 When a phase is `DivisionAware`, a tied group is first split by division name
 and only sub-groups of two or more teams are reordered, so teams in different
 divisions are never compared against each other.
+
+Once a tie is broken, every team behind the reordered group shifts down by the
+number of places the group expanded, so ranks stay strictly ordered by score:
+a team with fewer points can never end up ranked above one with more, and a
+team left tied with another (only possible across divisions of a `DivisionAware`
+phase) shares a rank rather than colliding with an unrelated team.
 
 ### Robot Performance points
 

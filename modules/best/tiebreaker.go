@@ -14,12 +14,30 @@ const TieBreakerBESTUnified = "BESTUnifiedTieBreaker"
 
 // unifiedTieBreaker is the live tie-breaker function for the current
 // module instance.  It is updated by New() on every construction so
-// the registered function always queries the current database.  The
-// default is a no-op that preserves input order.
-var unifiedTieBreaker modules.TieBreaker = func(teamNumbers []int, _ int) []int {
-	out := make([]int, len(teamNumbers))
-	copy(out, teamNumbers)
-	return out
+// the registered function always queries the current database.  It is
+// nil until the module is constructed; the registered dispatcher then
+// leaves the input order untouched.
+var unifiedTieBreaker modules.TieBreaker
+
+// registerTieBreaker installs the dispatcher for TieBreakerBESTUnified
+// in the global registry.  It is called from New(), so the name only
+// resolves once the BEST module is actually loaded: a setup file that
+// references it without the module reports as an unknown tie-breaker
+// instead of silently resolving to a no-op.  It is idempotent so
+// repeated module construction (multiple databases in one process,
+// as tests do) never panics on a duplicate registration.
+func registerTieBreaker() {
+	if _, ok := modules.GetTieBreaker(TieBreakerBESTUnified); ok {
+		return
+	}
+	modules.RegisterTieBreaker(TieBreakerBESTUnified, func(nums []int, mc int) []int {
+		if unifiedTieBreaker == nil {
+			out := make([]int, len(nums))
+			copy(out, nums)
+			return out
+		}
+		return unifiedTieBreaker(nums, mc)
+	})
 }
 
 // TieBreaker orders the given tied team numbers by notebook score
