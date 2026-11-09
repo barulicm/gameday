@@ -93,8 +93,11 @@ func performancePoints(rank, n int) float64 {
 // phase carrying the game module's Seeding role, the way the Game Award
 // reads the Final phase: the phase's own score summation and tie breaker
 // decide the ranking, and the results count only once it is frozen.
+// ByDivision follows the BEST Award's own grouping: points are ranked
+// within each division only when the award is given out per division.
 type performanceFromSeeding struct {
-	gm GameModule
+	gm         GameModule
+	byDivision bool
 }
 
 // Points implements performanceSource.  When more than one phase carries
@@ -127,30 +130,33 @@ func (p performanceFromSeeding) Points(ctx context.Context) (*performanceTable, 
 		return out, nil
 	}
 
-	return derivePerformance(tables), nil
+	return derivePerformance(tables, p.byDivision), nil
 }
 
 // derivePerformance turns seeding-phase ranking tables into points.
 //
-// Points are awarded per division unconditionally.  The BEST Award is
-// decided within a division (rules §9), but a seeding phase that is not
-// itself division aware yields a single field-wide table, where a small
-// division's best team is ranked behind every team of the field.
-// Regrouping the returned rows by each team's own division fixes that
-// case and is a no-op for a division aware phase, whose rows already
-// belong to one division each.
+// When byDivision is false, the BEST Award is one overall ranking, so
+// every team is one field: rank 1 of the contest earns the maximum and
+// the last team the floor.
+//
+// When byDivision is true, the award is decided within each division, so
+// points are too.  A seeding phase that is not itself division aware
+// yields a single field-wide table, where a small division's best team
+// is ranked behind every team of the field; regrouping the returned rows
+// by each team's own division fixes that case and is a no-op for a
+// division aware phase, whose rows already belong to one division each.
 //
 // Ranks are never re-decided here: the division-local rank advances only
 // when the phase's rank changes, so a tie in the phase stays a tie and
 // earns the same points, and the phase's configured tie breaker is
 // preserved.
-func derivePerformance(tables []game.PhaseRanking) *performanceTable {
+func derivePerformance(tables []game.PhaseRanking, byDivision bool) *performanceTable {
 	out := &performanceTable{ByTeam: map[uint]float64{}, State: performanceReady}
 
-	// Bucket the rows by division, keeping each phase table's ranking
-	// order and letting the first phase a team appears in decide its
-	// place.
-	byDivision := map[string][]game.RankingRow{}
+	// Collect all teams, keeping each phase table's ranking order and letting
+	// the first phase a team appears in decide its place. Optionally group
+	// teams by devision.
+	groups := map[string][]game.RankingRow{}
 	seen := map[uint]struct{}{}
 	for _, table := range tables {
 		if out.PhaseName == "" && table.PhaseName != "" {
@@ -161,19 +167,22 @@ func derivePerformance(tables []game.PhaseRanking) *performanceTable {
 				continue
 			}
 			seen[row.TeamID] = struct{}{}
-			name := row.Team.Division.Name
-			byDivision[name] = append(byDivision[name], row)
+			name := ""
+			if byDivision {
+				name = row.Team.Division.Name
+			}
+			groups[name] = append(groups[name], row)
 		}
 	}
 
-	divisions := make([]string, 0, len(byDivision))
-	for name := range byDivision {
+	divisions := make([]string, 0, len(groups))
+	for name := range groups {
 		divisions = append(divisions, name)
 	}
 	slices.Sort(divisions)
 
 	for _, name := range divisions {
-		rows := byDivision[name]
+		rows := groups[name]
 		n := len(rows)
 		rank := 0
 		prev := 0
@@ -190,14 +199,14 @@ func derivePerformance(tables []game.PhaseRanking) *performanceTable {
 	// A phase that ranked its own divisions already produced per-division
 	// tables; only a field-wide phase whose teams belong to more than one
 	// division was split here.
-	split := true
+	split := byDivision
 	for _, table := range tables {
 		if table.Division != "" {
 			split = false
 			break
 		}
 	}
-	out.SplitByDivision = split && len(byDivision) > 1
+	out.SplitByDivision = split && len(groups) > 1
 
 	return out
 }

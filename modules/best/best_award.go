@@ -197,7 +197,7 @@ func (d *awardDiagnosis) addPerformanceNotes(perf *performanceTable) {
 		d.Notes = append(d.Notes, note)
 	case performanceReady:
 		if perf.SplitByDivision {
-			d.Notes = append(d.Notes, "Robot Performance points are ranked per division even though the Seeding phase is not division aware.")
+			d.Notes = append(d.Notes, "Robot Performance points are ranked per division, matching the BEST Award, even though the Seeding phase is not division aware.")
 		}
 	}
 }

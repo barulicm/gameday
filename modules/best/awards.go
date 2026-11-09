@@ -135,7 +135,8 @@ func (s bestCategoryScorer) Score(ctx context.Context, teams []team.Team) (map[u
 // To add a new award, append one Award here.  To add a new metric,
 // implement a Scorer and reference it from an Award.  Whether an award
 // is ranked per division or overall is driven by the game module:
-// awards are division aware when any phase in the game is.
+// awards are division aware when any phase in the game is.  The BEST
+// Award's Robot Performance points follow the same grouping.
 func (m *Module) awardDefinitions() []Award {
 	divisionAware := m.divisionAware()
 
@@ -144,7 +145,7 @@ func (m *Module) awardDefinitions() []Award {
 			Key:           "best",
 			Name:          "BEST Award",
 			Description:   bestAwardDescription,
-			Scorer:        &bestAwardScorer{db: m.db, perf: performanceFromSeeding{gm: m.gm}},
+			Scorer:        &bestAwardScorer{db: m.db, perf: performanceFromSeeding{gm: m.gm, byDivision: divisionAware}},
 			DivisionAware: divisionAware,
 			Order:         0,
 		},

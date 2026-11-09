@@ -93,7 +93,7 @@ func TestDerivePerformanceFlatField(t *testing.T) {
 		rankingRow(103, "Gamma", "Open", 3),
 	)
 
-	result := derivePerformance([]game.PhaseRanking{table})
+	result := derivePerformance([]game.PhaseRanking{table}, true)
 	if result.State != performanceReady {
 		t.Fatalf("state = %q, want %q", result.State, performanceReady)
 	}
@@ -126,10 +126,10 @@ func pointsByTeamNumber(result *performanceTable, rows []game.RankingRow) map[in
 	return out
 }
 
-// TestDerivePerformanceFlatSeedingSplitsByDivision is the division
-// gotcha: a seeding phase that is not division aware yields one
-// field-wide ranking, but the BEST Award is decided within a division
-// (rules §9), so points must be derived per division.
+// TestDerivePerformanceFlatSeedingSplitsByDivision covers a BEST Award
+// given out per division: a seeding phase that is not division aware
+// yields one field-wide ranking, which is regrouped so each division's
+// top team earns the maximum.
 func TestDerivePerformanceFlatSeedingSplitsByDivision(t *testing.T) {
 	table := performanceRankingTable("",
 		rankingRow(101, "Alpha", "Open", 1),
@@ -139,7 +139,7 @@ func TestDerivePerformanceFlatSeedingSplitsByDivision(t *testing.T) {
 		rankingRow(202, "Epsilon", "Rookie", 5),
 	)
 
-	result := derivePerformance([]game.PhaseRanking{table})
+	result := derivePerformance([]game.PhaseRanking{table}, true)
 	if !result.SplitByDivision {
 		t.Fatalf("a flat multi-division phase should be reported as split")
 	}
@@ -165,7 +165,7 @@ func TestDerivePerformancePreservesTies(t *testing.T) {
 		rankingRow(103, "Gamma", "Open", 3),
 	)
 
-	result := derivePerformance([]game.PhaseRanking{table})
+	result := derivePerformance([]game.PhaseRanking{table}, true)
 	points := pointsByTeamNumber(result, table.Rows)
 	if points[101] != points[102] {
 		t.Errorf("tied teams earned different points: %v vs %v", points[101], points[102])
@@ -195,7 +195,7 @@ func TestDerivePerformanceDivisionAwareUnchanged(t *testing.T) {
 		),
 	}
 
-	result := derivePerformance(tables)
+	result := derivePerformance(tables, true)
 	if result.SplitByDivision {
 		t.Errorf("a division aware phase should not be reported as split")
 	}
@@ -217,7 +217,7 @@ func TestDerivePerformanceNoDivisionTeams(t *testing.T) {
 		rankingRow(102, "Beta", "", 2),
 	)
 
-	result := derivePerformance([]game.PhaseRanking{table})
+	result := derivePerformance([]game.PhaseRanking{table}, true)
 	if result.SplitByDivision {
 		t.Errorf("undivided teams should not be reported as a split")
 	}
@@ -325,5 +325,110 @@ func TestPerformanceFromSeedingEndToEnd(t *testing.T) {
 		if table.ByTeam[id] != expected {
 			t.Errorf("team %d points = %v, want %v", id, table.ByTeam[id], expected)
 		}
+	}
+}
+
+// Test scenario with multiple divisions, but one BEST Award overall ranking,
+// as should happen at hub-level events.
+func TestDerivePerformanceOverall(t *testing.T) {
+	table := performanceRankingTable("",
+		rankingRow(101, "Alpha", "Open", 1),
+		rankingRow(102, "Beta", "Open", 2),
+		rankingRow(103, "Gamma", "Open", 3),
+		rankingRow(201, "Delta", "Rookie", 4),
+		rankingRow(202, "Epsilon", "Rookie", 5),
+	)
+
+	result := derivePerformance([]game.PhaseRanking{table}, false)
+	if result.SplitByDivision {
+		t.Errorf("an overall ranking should never be reported as split")
+	}
+
+	points := pointsByTeamNumber(result, table.Rows)
+	want := map[int]float64{101: 250, 102: 194, 103: 138, 201: 81, 202: 25}
+	for number, expected := range want {
+		if points[number] != expected {
+			t.Errorf("team %d points = %v, want %v", number, points[number], expected)
+		}
+	}
+}
+
+func TestDerivePerformanceOverallPreservesTies(t *testing.T) {
+	table := performanceRankingTable("",
+		rankingRow(101, "Alpha", "Open", 1),
+		rankingRow(201, "Delta", "Rookie", 1),
+		rankingRow(102, "Beta", "Open", 3),
+	)
+
+	points := pointsByTeamNumber(derivePerformance([]game.PhaseRanking{table}, false), table.Rows)
+	if points[101] != 250 || points[201] != 250 {
+		t.Errorf("tied leaders across divisions = %v and %v, want 250 each", points[101], points[201])
+	}
+	if points[102] != 138 {
+		t.Errorf("trailing team = %v, want 138", points[102])
+	}
+}
+
+// TestBestAwardPerformanceFollowsAwardGrouping checks end to end that
+// Robot Performance is ranked the way the BEST Award is given out:
+// overall while no phase is division aware, per division once one is.
+func TestBestAwardPerformanceFollowsAwardGrouping(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		divisionAware bool
+		want          map[int]string
+	}{
+		{"overall award", false, map[int]string{101: "250.00", 102: "194.00", 103: "138.00", 201: "81.00", 202: "25.00"}},
+		{"per-division award", true, map[int]string{101: "250.00", 102: "138.00", 103: "25.00", 201: "250.00", 202: "25.00"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, d := newTestModule(t)
+
+			open := divisionByName(t, d, "Open")
+			rookie := createDivision(t, d, "Rookie")
+			teams := []team.Team{
+				createTeam(t, d, 101, "Alpha", open.ID),
+				createTeam(t, d, 102, "Beta", open.ID),
+				createTeam(t, d, 103, "Gamma", open.ID),
+				createTeam(t, d, 201, "Delta", rookie.ID),
+				createTeam(t, d, 202, "Epsilon", rookie.ID),
+			}
+			// The seeding phase itself is never division aware here;
+			// a later phase decides whether the awards are.
+			seedSeedingPhase(t, d, teams, false)
+			if tc.divisionAware {
+				later := game.GamePhase{Name: "Finals", Role: game.RoleFinal, ScoreSummation: "Total", DivisionAware: true}
+				if err := d.Create(&later).Error; err != nil {
+					t.Fatalf("create division aware phase: %v", err)
+				}
+			}
+
+			results, err := m.computeAwards(context.Background())
+			if err != nil {
+				t.Fatalf("computeAwards: %v", err)
+			}
+			var diag *awardDiagnosis
+			for _, res := range results {
+				if res.Award.Key == "best" {
+					if res.Award.DivisionAware != tc.divisionAware {
+						t.Fatalf("award DivisionAware = %v, want %v", res.Award.DivisionAware, tc.divisionAware)
+					}
+					diag = res.Diagnosis
+				}
+			}
+			if diag == nil {
+				t.Fatal("BEST Award has no diagnosis")
+			}
+
+			got := map[int]string{}
+			for _, c := range diag.Candidates {
+				got[c.Team.Number] = c.Cells[len(c.Cells)-1].Display
+			}
+			for number, want := range tc.want {
+				if got[number] != want {
+					t.Errorf("team %d Robot Performance = %s, want %s", number, got[number], want)
+				}
+			}
+		})
 	}
 }
