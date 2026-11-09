@@ -577,3 +577,237 @@ func TestImportScoresMissingTeamColumn(t *testing.T) {
 		t.Fatalf("expected no rows persisted, got %d", got)
 	}
 }
+
+func scoreCells(maxes ...float32) []scoreCell {
+	names := []string{"Notebook", "Marketing", "Poster", "Video"}
+	cells := make([]scoreCell, 0, len(maxes))
+	for i, max := range maxes {
+		name := ""
+		if i < len(names) {
+			name = names[i]
+		}
+		cells = append(cells, scoreCell{Key: names[i], Name: name, Max: max})
+	}
+	return cells
+}
+
+func withValues(cells []scoreCell, values ...float32) []scoreCell {
+	for i, v := range values {
+		value := v
+		cells[i].Value = &value
+	}
+	return cells
+}
+
+// onlyValue scores a single cell, leaving every other cell of the row blank.
+func onlyValue(cells []scoreCell, idx int, v float32) []scoreCell {
+	value := v
+	cells[idx].Value = &value
+	return cells
+}
+
+func TestLowScoreCategories(t *testing.T) {
+	tcs := []struct {
+		name string
+		rows [][]scoreCell
+		want []string
+	}{
+		{
+			name: "no teams",
+			rows: nil,
+			want: nil,
+		},
+		{
+			name: "no scores entered",
+			rows: [][]scoreCell{withValues(scoreCells(300, 250))},
+			want: nil,
+		},
+		{
+			name: "every notebook score below a third",
+			rows: [][]scoreCell{
+				withValues(scoreCells(300, 250), 50, 100),
+				withValues(scoreCells(300, 250), 90, 80),
+			},
+			want: []string{"Notebook"},
+		},
+		{
+			name: "a score at exactly 33 percent clears the warning",
+			rows: [][]scoreCell{
+				withValues(scoreCells(300, 250), 20, 10),
+				withValues(scoreCells(300, 250), 99, 5),
+			},
+			want: []string{"Marketing"},
+		},
+		{
+			name: "a single zero score still warns",
+			rows: [][]scoreCell{withValues(scoreCells(100), 0)},
+			want: []string{"Notebook"},
+		},
+		{
+			name: "categories judged normally are silent",
+			rows: [][]scoreCell{withValues(scoreCells(100, 100), 33, 90)},
+			want: nil,
+		},
+		{
+			name: "partially scored categories warn from entered scores only",
+			rows: [][]scoreCell{
+				withValues(scoreCells(300, 250), 5, 0),
+				withValues(scoreCells(300, 250)),
+			},
+			want: []string{"Notebook", "Marketing"},
+		},
+		{
+			// Regression: the first scored cell a team has may sit in a later
+			// category. Columns are keyed by index, so that cell must not
+			// become the identity of the earlier categories it left blank,
+			// which used to duplicate a warning and drop a real one.
+			name: "a score only in a later category keeps its own column",
+			rows: [][]scoreCell{
+				onlyValue(scoreCells(300, 250, 100, 100), 2, 1),
+				onlyValue(scoreCells(300, 250, 100, 100), 0, 200),
+			},
+			want: []string{"Poster"},
+		},
+		{
+			// A category with no usable maximum can never be judged low, and
+			// must not shift the categories after it out of alignment.
+			name: "a category with no usable maximum is skipped in place",
+			rows: [][]scoreCell{
+				onlyValue(scoreCells(0, 300, 250), 1, 10),
+				onlyValue(scoreCells(0, 300, 250), 2, 200),
+			},
+			want: []string{"Marketing"},
+		},
+		{
+			name: "a score only in the last category still checks the rest",
+			rows: [][]scoreCell{
+				onlyValue(scoreCells(300, 250, 100, 100), 3, 5),
+				onlyValue(scoreCells(300, 250, 100, 100), 0, 5),
+			},
+			want: []string{"Notebook", "Video"},
+		},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			var rows []scoreRow
+			for _, cells := range tc.rows {
+				rows = append(rows, scoreRow{Cells: cells})
+			}
+
+			got := lowScoreCategories(rows)
+			if len(got) != len(tc.want) {
+				t.Fatalf("expected %d warnings, got %d: %+v", len(tc.want), len(got), got)
+			}
+			for i, w := range tc.want {
+				if got[i].Name != w {
+					t.Errorf("warning %d: expected %q, got %+v", i, w, got[i])
+				}
+			}
+		})
+	}
+}
+
+func TestLowScoreCategoriesCountsAndThreshold(t *testing.T) {
+	rows := []scoreRow{
+		{Cells: withValues(scoreCells(300), 10)},
+		{Cells: withValues(scoreCells(300), 20)},
+	}
+
+	got := lowScoreCategories(rows)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 warning, got %+v", got)
+	}
+	if got[0].Scored != 2 {
+		t.Errorf("expected Scored 2, got %d", got[0].Scored)
+	}
+	if got[0].Max != 300 {
+		t.Errorf("expected Max 300, got %v", got[0].Max)
+	}
+	if diff := got[0].Threshold - 99; diff > 0.01 && diff < -0.01 {
+		t.Errorf("expected threshold near 99, got %v", got[0].Threshold)
+	}
+}
+
+func TestScoresRenderLowScoreWarning(t *testing.T) {
+	m, d := newTestModule(t)
+
+	tm := teamByNumber(t, d)
+	nb := scoreTypeForKey(t, d, "notebook")
+	mkt := scoreTypeForKey(t, d, "marketing")
+	if err := d.Create(&TeamScoreValue{TeamID: tm.ID, ScoreTypeID: nb.ID, Value: 12}).Error; err != nil {
+		t.Fatalf("seed low notebook: %v", err)
+	}
+	if err := d.Create(&TeamScoreValue{TeamID: tm.ID, ScoreTypeID: mkt.ID, Value: 200}).Error; err != nil {
+		t.Fatalf("seed healthy marketing: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "http://test.ui/ui/mod/best/scores/", nil)
+	w := httptest.NewRecorder()
+	m.uiViewScores(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	if !strings.Contains(body, "notification is-warning") {
+		t.Errorf("expected a warning notification, got: %s", body)
+	}
+	if !strings.Contains(body, "Notebook") || !strings.Contains(body, "below 33%") {
+		t.Errorf("warning does not name the low notebook category: %s", body)
+	}
+	// Both numbers in the notification render with two decimal places, never
+	// raw float32 output like "300.000000".
+	if !strings.Contains(body, "possible 300.00 points") {
+		t.Errorf("warning does not show the category maximum at 2dp: %s", body)
+	}
+	if !strings.Contains(body, "under 99.00") {
+		t.Errorf("warning does not show the threshold at 2dp: %s", body)
+	}
+	if warning := notificationText(t, body); strings.Contains(warning, ".000000") {
+		t.Errorf("warning renders unformatted floats: %s", warning)
+	}
+	// A category judged healthily must not be warned about.
+	if strings.Contains(body, "Marketing are below") {
+		t.Errorf("healthy marketing category warned about: %s", body)
+	}
+}
+
+// notificationText returns just the first warning notification on the page, so
+// assertions about the warning's formatting are not confused by the score
+// table's own markup.
+func notificationText(t *testing.T, body string) string {
+	t.Helper()
+
+	start := strings.Index(body, "notification is-warning")
+	if start < 0 {
+		t.Fatalf("page has no warning notification")
+	}
+	end := strings.Index(body[start:], "</div>")
+	if end < 0 {
+		t.Fatalf("warning notification is not closed")
+	}
+	return body[start : start+end]
+}
+
+func TestScoresRenderNoWarningWhenUnscored(t *testing.T) {
+	m, d := newTestModule(t)
+
+	tm := teamByNumber(t, d)
+	nb := scoreTypeForKey(t, d, "notebook")
+	if err := d.Create(&TeamScoreValue{TeamID: tm.ID, ScoreTypeID: nb.ID, Value: 250}).Error; err != nil {
+		t.Fatalf("seed notebook: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "http://test.ui/ui/mod/best/scores/", nil)
+	w := httptest.NewRecorder()
+	m.uiViewScores(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "notification is-warning") {
+		t.Errorf("expected no warning, got: %s", w.Body.String())
+	}
+}

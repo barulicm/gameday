@@ -14,6 +14,14 @@
       <br />
       <hr />
 
+      {% for warning in low_scores %}
+      <div class="notification is-warning is-light">
+        <strong>All scores in {{ warning.Name }} are below 33% of the possible {{ warning.Max|floatformat:2 }} points.</strong>
+        Every one of the {{ warning.Scored }} entered {{ warning.Name }} scores is under {{ warning.Threshold|floatformat:2 }}.
+        Please confirm the category was judged on the intended scale before the results are announced.
+      </div>
+      {% endfor %}
+
       <table class="table">
         <tr>
           <th>Number</th>

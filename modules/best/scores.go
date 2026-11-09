@@ -32,6 +32,92 @@ type scoreRow struct {
 	Total *float32
 }
 
+// lowScorePercent is the percentage of a category's maximum below which a
+// category is considered suspiciously scored.
+const (
+	lowScorePercent      = 33
+	lowScorePercentBasis = 100
+)
+
+// lowScoreWarning reports a score category in which every entered score is
+// below 33% of the category maximum. Judging an entire category that low
+// usually means the scores were recorded on the wrong scale, so the scores
+// page warns the operator.
+type lowScoreWarning struct {
+	Name      string
+	Max       float32
+	Threshold float32
+	Scored    int
+}
+
+// belowLowScore reports whether value is under 33% of max. The comparison is
+// done by cross-multiplication so a score of exactly 33% is not flagged, which
+// float rounding on e.g. 99 of 300 would otherwise do.
+func belowLowScore(value, max float32) bool {
+	return float64(value)*lowScorePercentBasis < float64(max)*lowScorePercent
+}
+
+// lowScoreCategories returns one warning per category, in column order, that
+// has at least one entered score and no score at or above 33% of its maximum.
+// A category with no scores yet is not warned about, and a category whose
+// maximum is not usable is skipped.
+//
+// Columns are identified by index across every row, not only across scored
+// ones: a team whose only score sits in a later category must not lend that
+// category's identity to the earlier columns it left blank.
+func lowScoreCategories(rows []scoreRow) []lowScoreWarning {
+	var widest *scoreRow
+	for i := range rows {
+		if widest == nil || len(rows[i].Cells) > len(widest.Cells) {
+			widest = &rows[i]
+		}
+	}
+	if widest == nil {
+		return nil
+	}
+
+	var columns []*lowScoreWarning
+	highest := make([]float32, 0, len(widest.Cells))
+	for _, c := range widest.Cells {
+		// A category without a usable maximum cannot be judged as low; the nil
+		// placeholder keeps every later column aligned to its index.
+		if c.Max <= 0 {
+			columns = append(columns, nil)
+			highest = append(highest, 0)
+			continue
+		}
+		columns = append(columns, &lowScoreWarning{
+			Name:      c.Name,
+			Max:       c.Max,
+			Threshold: c.Max * float32(lowScorePercent) / float32(lowScorePercentBasis),
+		})
+		highest = append(highest, 0)
+	}
+
+	for _, row := range rows {
+		for i, c := range row.Cells {
+			if i >= len(columns) || columns[i] == nil || c.Value == nil {
+				continue
+			}
+			columns[i].Scored++
+			if *c.Value > highest[i] {
+				highest[i] = *c.Value
+			}
+		}
+	}
+
+	var warnings []lowScoreWarning
+	for i, col := range columns {
+		if col == nil || col.Scored == 0 {
+			continue
+		}
+		if belowLowScore(highest[i], col.Max) {
+			warnings = append(warnings, *col)
+		}
+	}
+	return warnings
+}
+
 func (m *Module) ListTeamScores(ctx context.Context, saved string) ([]scoreRow, error) {
 	teams, err := gorm.G[team.Team](m.db.DB).
 		Preload("Division", nil).
@@ -110,7 +196,11 @@ func (m *Module) uiViewScores(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	m.ws.DoTemplate(w, r, "views/best/scores.p2", pongo2.Context{"scores": teamScores, "score_types": types})
+	m.ws.DoTemplate(w, r, "views/best/scores.p2", pongo2.Context{
+		"scores":      teamScores,
+		"score_types": types,
+		"low_scores":  lowScoreCategories(teamScores),
+	})
 }
 
 func (m *Module) uiViewScoreSet(w http.ResponseWriter, r *http.Request) {
